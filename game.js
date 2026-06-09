@@ -140,9 +140,9 @@ class Ship {
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
 
-    const ROT   = 3.5;   // rad/s
-    const THRUST = 260;  // px/s²
-    const DRAG   = 0.987;
+    const ROT    = hyperDrive > 0 ? 6.0  : 3.5;
+    const THRUST = hyperDrive > 0 ? 620  : 260;
+    const DRAG   = hyperDrive > 0 ? 0.994 : 0.987;
 
     if (keys['ArrowLeft'])  this.angle -= ROT * dt;
     if (keys['ArrowRight']) this.angle += ROT * dt;
@@ -183,7 +183,11 @@ class Ship {
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle);
-    ctx.strokeStyle = '#fff';
+    if (hyperDrive > 0) {
+      ctx.shadowColor = 'rgba(200,80,255,0.9)';
+      ctx.shadowBlur  = 18;
+    }
+    ctx.strokeStyle = hyperDrive > 0 ? 'rgba(220,120,255,1)' : '#fff';
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
 
@@ -284,6 +288,49 @@ class PowerUp {
   }
 }
 
+// ── HyperPowerUp ──────────────────────────────────────────────────────────────
+class HyperPowerUp {
+  constructor(x, y) {
+    this.x      = x;
+    this.y      = y;
+    this.radius = 14;
+    this.dead   = false;
+    this.ttl    = 8;
+    this.age    = 0;
+  }
+
+  update(dt) {
+    this.ttl -= dt;
+    this.age += dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    const pulse = 0.7 + 0.3 * Math.sin(this.age * 6);
+    const alpha = Math.min(1, this.ttl / 2) * pulse;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.strokeStyle = `rgba(200,80,255,${alpha.toFixed(2)})`;
+    ctx.shadowColor = 'rgba(200,80,255,0.9)';
+    ctx.shadowBlur  = 12;
+    ctx.lineWidth   = 1.8;
+    // Círculo exterior
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    // Símbolo: flecha de velocidad (rayo/chevron)
+    ctx.beginPath();
+    ctx.moveTo(-6, -7);
+    ctx.lineTo( 2, -1);
+    ctx.lineTo(-6,  7);
+    ctx.moveTo(-1, -7);
+    ctx.lineTo( 7, -1);
+    ctx.lineTo(-1,  7);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // ── BombaNova ─────────────────────────────────────────────────────────────────
 class BombaNova {
   constructor() {
@@ -342,6 +389,7 @@ class BombaNova {
 let ship, bullets, asteroids, particles, powerups;
 let score, lives, level;
 let tripleShot;
+let hyperDrive;
 let bombaNova, bombNovaCount, bombNovaTimer;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
@@ -360,8 +408,12 @@ function spawnAsteroids(count) {
     } while (Math.hypot(x - W / 2, y - H / 2) < SAFE_DIST);
     asteroids.push(new Asteroid(x, y, 3));
   }
-  // Marcar un asteroide aleatorio como portador del power-up
-  asteroids[randInt(0, asteroids.length - 1)].dropsPowerUp = true;
+  // Marcar dos asteroides distintos como portadores de power-ups
+  const idx1 = randInt(0, asteroids.length - 1);
+  let idx2;
+  do { idx2 = randInt(0, asteroids.length - 1); } while (idx2 === idx1 || asteroids.length < 2);
+  asteroids[idx1].dropsPowerUp = true;
+  if (asteroids.length >= 2) asteroids[idx2].dropsHyper = true;
 }
 
 function resetBombaNova() {
@@ -380,6 +432,7 @@ function initGame() {
   lives  = 3;
   level  = 1;
   tripleShot = 0;
+  hyperDrive = 0;
   resetBombaNova();
   state  = 'playing';
   spawnAsteroids(4);
@@ -390,6 +443,7 @@ function nextLevel() {
   bullets   = [];
   particles = [];
   powerups  = [];
+  hyperDrive = 0;
   resetBombaNova();
   ship.reset();
   spawnAsteroids(3 + level);
@@ -435,6 +489,7 @@ function update(dt) {
   }
 
   if (tripleShot > 0) tripleShot -= dt;
+  if (hyperDrive > 0) hyperDrive -= dt;
 
   // Spawn BombaNova (hasta 3 veces por nivel)
   if (!bombaNova && bombNovaCount < BOMB_MAX_PER_LEVEL) {
@@ -470,9 +525,8 @@ function update(dt) {
         score += POINTS[a.size];
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
-        if (a.dropsPowerUp) {
-          powerups.push(new PowerUp(a.x, a.y));
-        }
+        if (a.dropsPowerUp) powerups.push(new PowerUp(a.x, a.y));
+        if (a.dropsHyper)   powerups.push(new HyperPowerUp(a.x, a.y));
       }
     }
   }
@@ -496,8 +550,12 @@ function update(dt) {
     for (const p of powerups) {
       if (!p.dead && dist(ship, p) < ship.radius + p.radius) {
         p.dead = true;
-        tripleShot = 5;
         explode(p.x, p.y, 10);
+        if (p instanceof HyperPowerUp) {
+          hyperDrive = 8;
+        } else {
+          tripleShot = 5;
+        }
       }
     }
   }
@@ -554,12 +612,22 @@ function drawHUD() {
     ctx.fillText(`TRIPLE SHOT  ${Math.ceil(tripleShot)}s`, 14, 46);
   }
 
+  if (hyperDrive > 0) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(200,80,255,0.9)';
+    ctx.font = '13px monospace';
+    const lineH = tripleShot > 0 ? 62 : 46;
+    ctx.fillText(`HIPERPROPULSION  ${Math.ceil(hyperDrive)}s`, 14, lineH);
+  }
+
   if (bombaNova && !bombaNova.dead) {
     ctx.textAlign = 'left';
     ctx.fillStyle = 'rgba(255,90,0,0.9)';
     ctx.font = '13px monospace';
-    const line = tripleShot > 0 ? 62 : 46;
-    ctx.fillText(`BOMBA NOVA  ${Math.ceil(bombaNova.ttl)}s`, 14, line);
+    let lineB = 46;
+    if (tripleShot > 0) lineB += 16;
+    if (hyperDrive > 0) lineB += 16;
+    ctx.fillText(`BOMBA NOVA  ${Math.ceil(bombaNova.ttl)}s`, 14, lineB);
   }
 }
 
