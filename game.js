@@ -284,12 +284,71 @@ class PowerUp {
   }
 }
 
+// ── BombaNova ─────────────────────────────────────────────────────────────────
+class BombaNova {
+  constructor() {
+    let x, y;
+    do {
+      x = rand(80, W - 80);
+      y = rand(80, H - 80);
+    } while (Math.hypot(x - W / 2, y - H / 2) < 150);
+    this.x      = x;
+    this.y      = y;
+    this.radius = 18;
+    this.dead   = false;
+    this.ttl    = 9;
+    this.age    = 0;
+  }
+
+  update(dt) {
+    this.ttl -= dt;
+    this.age += dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    const pulse = 0.65 + 0.35 * Math.sin(this.age * 7);
+    const alpha = Math.min(1, this.ttl / 2) * pulse;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.strokeStyle = `rgba(255,90,0,${alpha.toFixed(2)})`;
+    ctx.fillStyle   = `rgba(255,90,0,${(alpha * 0.12).toFixed(2)})`;
+    ctx.shadowColor = 'rgba(255,90,0,0.9)';
+    ctx.shadowBlur  = 16;
+    ctx.lineWidth   = 2;
+    // Círculo exterior
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Rayos de explosión (8 puntas)
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 6, Math.sin(a) * 6);
+      ctx.lineTo(Math.cos(a) * 14, Math.sin(a) * 14);
+      ctx.stroke();
+    }
+    // Círculo central relleno
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,200,0,${alpha.toFixed(2)})`;
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 // ── Estado del juego ──────────────────────────────────────────────────────────
 let ship, bullets, asteroids, particles, powerups;
 let score, lives, level;
 let tripleShot;
+let bombaNova, bombNovaCount, bombNovaTimer;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
+
+const BOMB_MAX_PER_LEVEL = 3;
+const BOMB_FIRST_DELAY   = 4;   // segundos hasta la primera aparición
+const BOMB_NEXT_DELAY    = 5;   // segundos hasta la siguiente si la anterior expiró
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -305,6 +364,12 @@ function spawnAsteroids(count) {
   asteroids[randInt(0, asteroids.length - 1)].dropsPowerUp = true;
 }
 
+function resetBombaNova() {
+  bombaNova      = null;
+  bombNovaCount  = 0;
+  bombNovaTimer  = BOMB_FIRST_DELAY;
+}
+
 function initGame() {
   ship      = new Ship();
   bullets   = [];
@@ -315,6 +380,7 @@ function initGame() {
   lives  = 3;
   level  = 1;
   tripleShot = 0;
+  resetBombaNova();
   state  = 'playing';
   spawnAsteroids(4);
 }
@@ -324,6 +390,7 @@ function nextLevel() {
   bullets   = [];
   particles = [];
   powerups  = [];
+  resetBombaNova();
   ship.reset();
   spawnAsteroids(3 + level);
 }
@@ -369,6 +436,20 @@ function update(dt) {
 
   if (tripleShot > 0) tripleShot -= dt;
 
+  // Spawn BombaNova (hasta 3 veces por nivel)
+  if (!bombaNova && bombNovaCount < BOMB_MAX_PER_LEVEL) {
+    bombNovaTimer -= dt;
+    if (bombNovaTimer <= 0) {
+      bombaNova     = new BombaNova();
+      bombNovaCount++;
+      bombNovaTimer = BOMB_NEXT_DELAY;
+    }
+  }
+  if (bombaNova) {
+    bombaNova.update(dt);
+    if (bombaNova.dead) bombaNova = null;
+  }
+
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
   asteroids.forEach(a => a.update(dt));
@@ -397,6 +478,18 @@ function update(dt) {
   }
   asteroids = asteroids.filter(a => !a.dead).concat(newAsteroids);
   bullets   = bullets.filter(b => !b.dead);
+
+  // Nave vs BombaNova
+  if (!ship.dead && bombaNova && !bombaNova.dead && dist(ship, bombaNova) < ship.radius + bombaNova.radius) {
+    bombaNova.dead = true;
+    bombaNova = null;
+    for (const a of asteroids) {
+      explode(a.x, a.y, a.size * 6);
+      a.dead = true;
+    }
+    asteroids = [];
+    score += 500;
+  }
 
   // Nave vs power-up
   if (!ship.dead) {
@@ -460,6 +553,14 @@ function drawHUD() {
     ctx.font = '13px monospace';
     ctx.fillText(`TRIPLE SHOT  ${Math.ceil(tripleShot)}s`, 14, 46);
   }
+
+  if (bombaNova && !bombaNova.dead) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,90,0,0.9)';
+    ctx.font = '13px monospace';
+    const line = tripleShot > 0 ? 62 : 46;
+    ctx.fillText(`BOMBA NOVA  ${Math.ceil(bombaNova.ttl)}s`, 14, line);
+  }
 }
 
 function drawOverlay(title, sub) {
@@ -479,6 +580,7 @@ function draw() {
   particles.forEach(p => p.draw());
   asteroids.forEach(a => a.draw());
   powerups.forEach(p => p.draw());
+  if (bombaNova) bombaNova.draw();
   bullets.forEach(b => b.draw());
   ship.draw();
 
